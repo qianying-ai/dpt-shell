@@ -683,6 +683,7 @@ DPT_ENCRYPT void read_shell_config(JNIEnv *env) {
                 const char *keyDexSign = AY_OBFUSCATE("dex_sign");
                 const char *keyInsnsXorKey = AY_OBFUSCATE("insns_xor_key");
                 const char *keyRiskCheckFlags = AY_OBFUSCATE("risk_check_flags");
+                const char *keyDexZipKey = AY_OBFUSCATE("dex_zip_key");
                 g_shell_config.application_name = shell_config.value(keyAppName, "");
                 g_shell_config.application_component_factory = shell_config.value(keyAcfName, "");
                 g_shell_config.jni_class_name = shell_config.value(keyJniClsName, "");
@@ -690,6 +691,7 @@ DPT_ENCRYPT void read_shell_config(JNIEnv *env) {
                 g_shell_config.dex_sign = shell_config.value(keyDexSign, "");
                 g_shell_config.insns_xor_key = shell_config.value(keyInsnsXorKey, 0);
                 g_shell_config.risk_check_flags = shell_config.value(keyRiskCheckFlags, 0);
+                g_shell_config.dex_zip_key = shell_config.value(keyDexZipKey, "");
 
                 DLOGD("application_name = %s", g_shell_config.application_name.c_str());
                 DLOGD("application_component_factory = %s", g_shell_config.application_component_factory.c_str());
@@ -698,6 +700,7 @@ DPT_ENCRYPT void read_shell_config(JNIEnv *env) {
                 DLOGD("dex_sign = %s", g_shell_config.dex_sign.c_str());
                 DLOGD("insns_xor_key = 0x%x", g_shell_config.insns_xor_key);
                 DLOGD("risk_check_flags = 0x%x", g_shell_config.risk_check_flags);
+                DLOGD("dex_zip_key length = %zu", g_shell_config.dex_zip_key.size());
             } catch (const std::exception &e) {
                 DLOGE("parse shell config failed: %s", e.what());
             }

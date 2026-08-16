@@ -27,6 +27,10 @@ public class ShellConfig {
     @JSONField(name = "insns_xor_key")
     private int insnsXorKey;
 
+    // AES-256 key (32 bytes, hex encoded) for the dex zip blob appended to shell classes.dex
+    @JSONField(name = "dex_zip_key")
+    private String dexZipKey;
+
     // One int, each bit is a switch (1 = disable). See Const.FLAG_DISABLE_*
     @JSONField(name = "risk_check_flags")
     private int riskCheckFlags;
@@ -104,6 +108,7 @@ public class ShellConfig {
         this.signatureConfig = shellConfig.getSignatureConfig();
         this.appSignSha256 = shellConfig.getAppSignSha256();
         this.riskCheckFlags = shellConfig.getRiskCheckFlags();
+        this.dexZipKey = shellConfig.getDexZipKey();
     }
 
     public String getSlashShellPackageName() {
@@ -159,6 +164,14 @@ public class ShellConfig {
         this.insnsXorKey = insnsXorKey;
     }
 
+    public String getDexZipKey() {
+        return dexZipKey;
+    }
+
+    public void setDexZipKey(String dexZipKey) {
+        this.dexZipKey = dexZipKey;
+    }
+
     public int getRiskCheckFlags() {
         return riskCheckFlags;
     }
@@ -190,6 +203,9 @@ public class ShellConfig {
         jsonObject.put("dex_sign", getDexSign());
         jsonObject.put("insns_xor_key", getInsnsXorKey());
         jsonObject.put("risk_check_flags", getRiskCheckFlags());
+        if (!StringUtils.isBlank(getDexZipKey())) {
+            jsonObject.put("dex_zip_key", getDexZipKey());
+        }
         return jsonObject.toString();
     }
 

@@ -53,6 +53,8 @@ struct ShellConfig {
     std::string dex_sign;
     uint32_t insns_xor_key = 0;
     uint32_t risk_check_flags = 0;
+    // AES-256 key (hex, 64 chars) for the dex zip blob appended to shell classes.dex
+    std::string dex_zip_key;
 };
 
 void callRealApplicationOnCreate(JNIEnv *env, jclass, jstring realApplicationClassName);

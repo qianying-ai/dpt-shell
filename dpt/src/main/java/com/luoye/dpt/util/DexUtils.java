@@ -280,7 +280,7 @@ public class DexUtils {
                         continue;
                     }
 
-                    Instruction instruction = extractMethod(dex, randomAccessFile, classDef, method, smaller);
+                    Instruction instruction = extractMethod(dex, randomAccessFile, classDef, method, dexNumber, smaller);
                     if(instruction != null) {
                         instructionList.add(instruction);
                         putToJSON(classJSONArray, instruction);
@@ -323,6 +323,31 @@ public class DexUtils {
     }
 
     /**
+     * splitmix64 finalizer-style mixer. Must stay bit-identical with the C++
+     * implementation in dpt_hook.cpp (unsigned shifts, long wraparound == uint64_t).
+     */
+    private static long splitmix64(long s) {
+        s += 0x9E3779B97F4A7C15L;
+        long z = s;
+        z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+        z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+        return z ^ (z >>> 31);
+    }
+
+    /**
+     * Derive the per-method 8-byte instruction key stream from the master key.
+     * dexIndex is 0-based (classes.dex -> 0), same semantics as the runtime
+     * dexMap index (dpt.cpp readCodeItem / dpt_util.cpp parse_dex_number).
+     * Must stay bit-identical with patchMethod() in dpt_hook.cpp.
+     */
+    private static long deriveInsnsKeyStream(int masterKey, int dexIndex, int methodIdx) {
+        long seed = (masterKey & 0xffffffffL)
+                ^ (((long) dexIndex + 1) << 32)
+                ^ ((methodIdx & 0xffffffffL) * 0x9E3779B97F4A7C15L);
+        return splitmix64(seed);
+    }
+
+    /**
      * Extract a method code
      * @param dex dex struct
      * @param outRandomAccessFile out file
@@ -333,6 +358,7 @@ public class DexUtils {
                                              RandomAccessFile outRandomAccessFile,
                                              ClassDef classDef,
                                              ClassData.Method method,
+                                             int dexNumber,
                                              boolean obfuscateIns) throws Exception {
 
         String returnTypeName = dex.typeNames().get(dex.protoIds().get(dex.methodIds().get(method.getMethodIndex()).getProtoIndex()).getReturnTypeIndex());
@@ -394,9 +420,11 @@ public class DexUtils {
 
         int xorKey = ShellConfig.getInstance().getInsnsXorKey();
         if (xorKey != 0) {
+            // Per-method key stream derived from the master key; see deriveInsnsKeyStream.
+            long ks = deriveInsnsKeyStream(xorKey, dexNumber, method.getMethodIndex());
             for (int i = 0; i < byteCode.length; i++) {
-                int shift = (i & 3) << 3;
-                byteCode[i] = (byte) (byteCode[i] ^ ((xorKey >> shift) & 0xff));
+                int shift = (i & 7) << 3;
+                byteCode[i] = (byte) (byteCode[i] ^ ((ks >>> shift) & 0xff));
             }
         }
         instruction.setInstructionsData(byteCode);

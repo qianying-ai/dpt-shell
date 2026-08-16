@@ -50,6 +50,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -303,19 +304,37 @@ public abstract class AndroidPackage {
 
             File originalDexZipFile = new File(getOutAssetsDir(packageMainProcessPath).getAbsolutePath() + File.separator + Const.KEY_DEXES_STORE_NAME);
             byte[] zipData = com.android.dex.util.FileUtils.readFile(originalDexZipFile);// Read the zip file as binary data
+
+            // Encrypt the dex zip: blob = [IV 16B random][AES-256-CBC/PKCS7 ciphertext].
+            // The 4-byte big-endian trailing length covers the whole blob (16 + ciphertext).
+            String dexZipKeyHex = shellConfig.getDexZipKey();
+            byte[] dexZipKey = HexUtils.hexToBytes(dexZipKeyHex);
+            if (dexZipKey == null || dexZipKey.length != 32) {
+                throw new IllegalStateException("dex_zip_key is missing or invalid, cannot encrypt dex zip");
+            }
+            byte[] iv = new byte[16];
+            new SecureRandom().nextBytes(iv);
+            byte[] zipCipher = CryptoUtils.aesEncrypt(dexZipKey, iv, zipData);
+            if (zipCipher == null) {
+                throw new IllegalStateException("encrypt dex zip failed");
+            }
+            byte[] zipBlob = new byte[iv.length + zipCipher.length];
+            System.arraycopy(iv, 0, zipBlob, 0, iv.length);
+            System.arraycopy(zipCipher, 0, zipBlob, iv.length, zipCipher.length);
+
             byte[] unShellDexArray =  com.android.dex.util.FileUtils.readFile(!needRename ? shellDexFile : renameDexFile); // Read the dex file as binary data
-            int zipDataLen = zipData.length;
+            int zipDataLen = zipBlob.length;
             int unShellDexLen = unShellDexArray.length;
-            LogUtils.info("Dexes zip file size: %s", zipDataLen);
+            LogUtils.info("Dexes zip file size: %s (encrypted blob: %s)", zipData.length, zipDataLen);
             LogUtils.info("Proxy dex file size: %s", unShellDexLen);
             int totalLen = zipDataLen + unShellDexLen + 4;// An additional 4 bytes are added to store the length
             byte[] newDexBytes = new byte[totalLen]; // Allocate the new length
 
             // Add the shell code
             System.arraycopy(unShellDexArray, 0, newDexBytes, 0, unShellDexLen);// First, copy the dex content
-            // Add the unencrypted zip data
-            System.arraycopy(zipData, 0, newDexBytes, unShellDexLen, zipDataLen); // Then copy the APK content after the dex content
-            // Add the length of the shell data
+            // Add the encrypted zip blob
+            System.arraycopy(zipBlob, 0, newDexBytes, unShellDexLen, zipDataLen); // Then copy the blob after the dex content
+            // Add the length of the blob
             System.arraycopy(FileUtils.intToByte(zipDataLen), 0, newDexBytes, totalLen - 4, 4);// The last 4 bytes are for the length
 
             // Modify the DEX file size header
@@ -659,7 +678,10 @@ public abstract class AndroidPackage {
 
     public void extractDexCode(String packageDir, String dexCodeSavePath) {
         List<File> dexFiles = getDexFiles(getDexDir(packageDir));
-        Map<Integer,List<Instruction>> instructionMap = new HashMap<>();
+        // TreeMap keeps ascending dex numbers so MultiDexCode entries are stored in
+        // dex order (classes.dex -> slot 0, classes2.dex -> slot 1, ...), matching the
+        // runtime dexMap index semantics (dpt.cpp readCodeItem / parse_dex_number).
+        Map<Integer,List<Instruction>> instructionMap = new TreeMap<>();
         String appNameNew = Const.KEY_CODE_ITEM_STORE_NAME;
         String dataOutputPath = dexCodeSavePath + File.separator + appNameNew;
 
@@ -674,6 +696,11 @@ public abstract class AndroidPackage {
                 key = 0x6f3a2c1d;
             }
             shellConfig.setInsnsXorKey(key);
+        }
+        if (org.apache.commons.lang3.StringUtils.isBlank(shellConfig.getDexZipKey())) {
+            byte[] dexZipKeyBytes = new byte[32];
+            new SecureRandom().nextBytes(dexZipKeyBytes);
+            shellConfig.setDexZipKey(HexUtils.toHexString(dexZipKeyBytes));
         }
         for(File dexFile : dexFiles) {
             ThreadPool.getInstance().execute(() -> {

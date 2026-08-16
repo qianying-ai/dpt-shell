@@ -77,6 +77,31 @@ void change_dex_protective(uint8_t * begin,int dexSize,int dexIndex){
     }
 }
 
+/**
+ * splitmix64 mixer. Must stay bit-identical with the Java implementation in
+ * DexUtils.splitmix64 (uint64_t wraparound == Java long overflow, >> == >>>).
+ */
+static inline uint64_t splitmix64(uint64_t s) {
+    s += 0x9E3779B97F4A7C15ULL;
+    uint64_t z = s;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+
+/**
+ * Derive the per-method 8-byte instruction key stream from the master key.
+ * dexIndex is 0-based and matches the packager's DexUtils.getDexNumber order
+ * (which is also the MultiDexCode storage order read by readCodeItem).
+ * Must stay bit-identical with DexUtils.deriveInsnsKeyStream.
+ */
+static inline uint64_t derive_insns_key_stream(uint32_t masterKey, int dexIndex, uint32_t methodIdx) {
+    uint64_t seed = (uint64_t) masterKey
+            ^ (((uint64_t) dexIndex + 1u) << 32u)
+            ^ ((uint64_t) methodIdx * 0x9E3779B97F4A7C15ULL);
+    return splitmix64(seed);
+}
+
 DPT_ENCRYPT
 ALWAYS_INLINE
 void patchMethod(uint8_t *begin,
@@ -119,9 +144,11 @@ void patchMethod(uint8_t *begin,
                 uint32_t sz = codeItem->getInsnsSize();
                 tmp.resize(sz);
                 const uint8_t* enc = codeItem->getInsns();
+                // Per-method key stream; see derive_insns_key_stream.
+                uint64_t ks = derive_insns_key_stream(xorKey, dexIndex, methodIdx);
                 for (uint32_t i = 0; i < sz; i++) {
-                    uint32_t shift = (i & 3u) << 3u;
-                    tmp[i] = (uint8_t)(enc[i] ^ ((xorKey >> shift) & 0xffu));
+                    uint32_t shift = (i & 7u) << 3u;
+                    tmp[i] = (uint8_t)(enc[i] ^ ((ks >> shift) & 0xffu));
                 }
                 memcpy(realInsnsPtr, tmp.data(), sz);
             }

@@ -18,6 +18,8 @@
 #include <sys/uio.h>
 
 #include "dpt_util.h"
+#include "dpt.h"
+#include "dpt_crypto.h"
 #include "common/dpt_log.h"
 
 using namespace dpt;
@@ -320,6 +322,51 @@ static uint32_t readZipLength(const uint8_t *data, size_t size) {
     return length;
 }
 
+static int hex_char_value(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+extern ShellConfig g_shell_config;
+
+/**
+ * Decrypt the dex zip blob appended to shell classes.dex.
+ * Blob format: [IV 16B][AES-256-CBC/PKCS7 ciphertext], key = g_shell_config.dex_zip_key (hex).
+ * Returns plaintext zip bytes; empty vector on failure.
+ * Defensive fallback: empty dex_zip_key returns the blob as-is (should not happen in practice).
+ */
+DPT_ENCRYPT static std::vector<uint8_t> decrypt_dex_zip_blob(const uint8_t *blob, size_t len) {
+    if (blob == nullptr || len == 0) {
+        return {};
+    }
+    if (g_shell_config.dex_zip_key.empty()) {
+        DLOGW("dex_zip_key is empty, treat dex zip blob as plain");
+        return std::vector<uint8_t>(blob, blob + len);
+    }
+    const std::string &key_hex = g_shell_config.dex_zip_key;
+    if (key_hex.size() != 64) {
+        DLOGE("invalid dex_zip_key length: %zu", key_hex.size());
+        return {};
+    }
+    if (len < 16 + 16 || ((len - 16) % 16) != 0) {
+        DLOGE("invalid dex zip blob length: %zu", len);
+        return {};
+    }
+    uint8_t key[32] = {0};
+    for (int i = 0; i < 32; i++) {
+        int hi = hex_char_value(key_hex[i * 2]);
+        int lo = hex_char_value(key_hex[i * 2 + 1]);
+        if (hi < 0 || lo < 0) {
+            DLOGE("invalid dex_zip_key hex char");
+            return {};
+        }
+        key[i] = static_cast<uint8_t>((hi << 4) | lo);
+    }
+    return aes_cbc_decrypt(key, 256, blob, blob + 16, len - 16);
+}
+
 
 DPT_ENCRYPT static void
 writeDexAchieve(const char *dexAchievePath, void *package_addr, size_t package_size) {
@@ -334,9 +381,17 @@ writeDexAchieve(const char *dexAchievePath, void *package_addr, size_t package_s
             DLOGD("Extracted zip data length: %u", (unsigned int) zipDataLen);
 
             if (zipDataLen > 0 && entry_size > zipDataLen + 4) {
-                uint8_t *zipDataStart = (uint8_t *) entry_data + (entry_size - zipDataLen - 4);
-                fwrite(zipDataStart, 1, zipDataLen, fp);
-                DLOGD("Zip file extracted and written successfully.");
+                uint8_t *zipBlobStart = (uint8_t *) entry_data + (entry_size - zipDataLen - 4);
+                // The blob is encrypted (IV || AES-256-CBC); decrypt before writing to disk.
+                // This disk path only triggers on API < 26 (see init_app in dpt.cpp);
+                // on API >= 26 dexes stay in memory and plaintext never touches disk.
+                std::vector<uint8_t> plainZip = decrypt_dex_zip_blob(zipBlobStart, zipDataLen);
+                if (!plainZip.empty()) {
+                    fwrite(plainZip.data(), 1, plainZip.size(), fp);
+                    DLOGD("Zip file decrypted, extracted and written successfully.");
+                } else {
+                    DLOGE("decrypt dex zip blob failed, len: %u", (unsigned int) zipDataLen);
+                }
             } else {
                 DLOGE("Invalid zip data length: %u. dex_files_size: %lu", (unsigned int) zipDataLen,
                       (unsigned long) entry_size);
@@ -438,11 +493,17 @@ readDexZipFromPackage(void *package_addr, size_t package_size) {
         return std::nullopt;
     }
 
-    uint8_t *zipDataStart = entry_data + (entry_size - zipDataLen - 4);
-    auto *zip_copy = new uint8_t[zipDataLen];
-    memcpy(zip_copy, zipDataStart, zipDataLen);
+    uint8_t *zipBlobStart = entry_data + (entry_size - zipDataLen - 4);
+    std::vector<uint8_t> plainZip = decrypt_dex_zip_blob(zipBlobStart, zipDataLen);
     delete[] entry_data;
-    return {{zip_copy, zipDataLen}};
+    if (plainZip.empty()) {
+        DLOGE("decrypt dex zip blob failed, len: %u", (unsigned int) zipDataLen);
+        return std::nullopt;
+    }
+
+    auto *zip_copy = new uint8_t[plainZip.size()];
+    memcpy(zip_copy, plainZip.data(), plainZip.size());
+    return {{zip_copy, plainZip.size()}};
 }
 
 DPT_ENCRYPT static bool
