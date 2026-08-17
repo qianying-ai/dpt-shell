@@ -16,6 +16,7 @@
 #include <optional>
 #include <sys/syscall.h>
 #include <sys/uio.h>
+#include <unistd.h>
 
 #include "dpt_util.h"
 #include "dpt.h"
@@ -368,43 +369,61 @@ DPT_ENCRYPT static std::vector<uint8_t> decrypt_dex_zip_blob(const uint8_t *blob
 }
 
 
-DPT_ENCRYPT static void
+DPT_ENCRYPT static bool
 writeDexAchieve(const char *dexAchievePath, void *package_addr, size_t package_size) {
     DLOGD("zipCode open = %s", dexAchievePath);
-    FILE *fp = fopen(dexAchievePath, "wb");
-    if (fp != nullptr) {
-        auto entry = read_zip_file_entry(package_addr, package_size, COMBINE_DEX_FILES_NAME_IN_ZIP);
-        if (entry.has_value()) {
-            auto [entry_data, entry_size] = entry.value();
-            DLOGD("Read classes.dex of size: %lu", (unsigned long) entry_size);
-            uint32_t zipDataLen = readZipLength((uint8_t *) entry_data, entry_size);
-            DLOGD("Extracted zip data length: %u", (unsigned int) zipDataLen);
-
-            if (zipDataLen > 0 && entry_size > zipDataLen + 4) {
-                uint8_t *zipBlobStart = (uint8_t *) entry_data + (entry_size - zipDataLen - 4);
-                // The blob is encrypted (IV || AES-256-CBC); decrypt before writing to disk.
-                // This disk path only triggers on API < 26 (see init_app in dpt.cpp);
-                // on API >= 26 dexes stay in memory and plaintext never touches disk.
-                std::vector<uint8_t> plainZip = decrypt_dex_zip_blob(zipBlobStart, zipDataLen);
-                if (!plainZip.empty()) {
-                    fwrite(plainZip.data(), 1, plainZip.size(), fp);
-                    DLOGD("Zip file decrypted, extracted and written successfully.");
-                } else {
-                    DLOGE("decrypt dex zip blob failed, len: %u", (unsigned int) zipDataLen);
-                }
-            } else {
-                DLOGE("Invalid zip data length: %u. dex_files_size: %lu", (unsigned int) zipDataLen,
-                      (unsigned long) entry_size);
-            }
-
-            delete[] entry_data;
-        } else {
-            DLOGE("Failed to read classes.dex.");
-        }
-        fclose(fp);
-    } else {
-        DLOGE("WTF! zipCode write fail: %s", strerror(errno));
+    auto entry = read_zip_file_entry(package_addr, package_size, COMBINE_DEX_FILES_NAME_IN_ZIP);
+    if (!entry.has_value()) {
+        DLOGE("Failed to read classes.dex.");
+        return false;
     }
+
+    auto [entry_data, entry_size] = entry.value();
+    DLOGD("Read classes.dex of size: %lu", (unsigned long) entry_size);
+    uint32_t zipDataLen = readZipLength((uint8_t *) entry_data, entry_size);
+    DLOGD("Extracted zip data length: %u", (unsigned int) zipDataLen);
+
+    if (zipDataLen == 0 || entry_size <= zipDataLen + 4) {
+        DLOGE("Invalid zip data length: %u. dex_files_size: %lu", (unsigned int) zipDataLen,
+              (unsigned long) entry_size);
+        delete[] entry_data;
+        return false;
+    }
+
+    uint8_t *zipBlobStart = (uint8_t *) entry_data + (entry_size - zipDataLen - 4);
+    // The blob is encrypted (IV || AES-256-CBC); decrypt before writing to disk.
+    // This disk path only triggers on API < 26 (see init_app in dpt.cpp);
+    // on API >= 26 dexes stay in memory and plaintext never touches disk.
+    std::vector<uint8_t> plainZip = decrypt_dex_zip_blob(zipBlobStart, zipDataLen);
+    delete[] entry_data;
+    if (plainZip.empty()) {
+        DLOGE("decrypt dex zip blob failed, len: %u", (unsigned int) zipDataLen);
+        return false;
+    }
+
+    std::string temp_path = std::string(dexAchievePath) + ".tmp." + std::to_string(getpid());
+    FILE *fp = fopen(temp_path.c_str(), "wb");
+    if (fp == nullptr) {
+        DLOGE("WTF! zipCode temp write fail: %s", strerror(errno));
+        return false;
+    }
+    size_t written = fwrite(plainZip.data(), 1, plainZip.size(), fp);
+    bool write_ok = written == plainZip.size() && fflush(fp) == 0 && fsync(fileno(fp)) == 0;
+    if (fclose(fp) != 0) {
+        write_ok = false;
+    }
+    if (!write_ok) {
+        DLOGE("write decrypted dex zip failed: %s", strerror(errno));
+        unlink(temp_path.c_str());
+        return false;
+    }
+    if (rename(temp_path.c_str(), dexAchievePath) != 0) {
+        DLOGE("rename decrypted dex zip failed: %s", strerror(errno));
+        unlink(temp_path.c_str());
+        return false;
+    }
+    DLOGD("Zip file decrypted and atomically written successfully.");
+    return true;
 }
 
 DPT_ENCRYPT void extractDexesInNeeded(JNIEnv *env, void *package_addr, size_t package_size) {
@@ -416,16 +435,18 @@ DPT_ENCRYPT void extractDexesInNeeded(JNIEnv *env, void *package_addr, size_t pa
 
     if (access(codeCachePathChs, F_OK) == 0) {
         if (access(compressedDexesPathChs, F_OK) != 0) {
-            writeDexAchieve(compressedDexesPathChs, package_addr, package_size);
-            chmod(compressedDexesPathChs, 0444);
-            DLOGI("%s write finish", compressedDexesPathChs);
+            if (writeDexAchieve(compressedDexesPathChs, package_addr, package_size)) {
+                chmod(compressedDexesPathChs, 0444);
+                DLOGI("%s write finish", compressedDexesPathChs);
+            }
         } else {
             DLOGI("dex files is achieved!");
         }
     } else {
         if (mkdir(codeCachePathChs, 0775) == 0) {
-            writeDexAchieve(compressedDexesPathChs, package_addr, package_size);
-            chmod(compressedDexesPathChs, 0444);
+            if (writeDexAchieve(compressedDexesPathChs, package_addr, package_size)) {
+                chmod(compressedDexesPathChs, 0444);
+            }
         } else {
             DLOGE("WTF! extractDexes cannot make code_cache directory!");
         }

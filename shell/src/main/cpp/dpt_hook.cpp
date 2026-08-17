@@ -10,6 +10,7 @@
 #include "dex/CodeItem.h"
 #include "common/dpt_string.h"
 #include "dpt_hook.h"
+#include "dpt_kdf.h"
 #include "dpt_risk.h"
 #include "dpt_util.h"
 #include "bytehook.h"
@@ -75,31 +76,6 @@ void change_dex_protective(uint8_t * begin,int dexSize,int dexIndex){
             break;
         }
     }
-}
-
-/**
- * splitmix64 mixer. Must stay bit-identical with the Java implementation in
- * DexUtils.splitmix64 (uint64_t wraparound == Java long overflow, >> == >>>).
- */
-static inline uint64_t splitmix64(uint64_t s) {
-    s += 0x9E3779B97F4A7C15ULL;
-    uint64_t z = s;
-    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
-    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
-    return z ^ (z >> 31);
-}
-
-/**
- * Derive the per-method 8-byte instruction key stream from the master key.
- * dexIndex is 0-based and matches the packager's DexUtils.getDexNumber order
- * (which is also the MultiDexCode storage order read by readCodeItem).
- * Must stay bit-identical with DexUtils.deriveInsnsKeyStream.
- */
-static inline uint64_t derive_insns_key_stream(uint32_t masterKey, int dexIndex, uint32_t methodIdx) {
-    uint64_t seed = (uint64_t) masterKey
-            ^ (((uint64_t) dexIndex + 1u) << 32u)
-            ^ ((uint64_t) methodIdx * 0x9E3779B97F4A7C15ULL);
-    return splitmix64(seed);
 }
 
 DPT_ENCRYPT

@@ -76,13 +76,19 @@ std::vector<uint8_t> aes_cbc_decrypt(const uint8_t *key,
     if (!out_vec.empty()) {
         uint8_t pad = out_vec.back();
         DLOGD("padding: %d", pad);
-        if (pad > 0 && pad <= 16 && pad <= out_vec.size()) {
-            out_vec.resize(out_vec.size() - pad);
-        } else {
+        if (pad == 0 || pad > 16 || pad > out_vec.size()) {
             DLOGE("invalid padding");
             mbedtls_aes_free(&ctx);
             return {};
         }
+        for (size_t i = 0; i < pad; ++i) {
+            if (out_vec[out_vec.size() - 1 - i] != pad) {
+                DLOGE("invalid padding bytes");
+                mbedtls_aes_free(&ctx);
+                return {};
+            }
+        }
+        out_vec.resize(out_vec.size() - pad);
     }
 
     mbedtls_aes_free(&ctx);

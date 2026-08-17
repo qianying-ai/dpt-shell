@@ -50,8 +50,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.TreeMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public abstract class AndroidPackage {
@@ -314,13 +314,10 @@ public abstract class AndroidPackage {
             }
             byte[] iv = new byte[16];
             new SecureRandom().nextBytes(iv);
-            byte[] zipCipher = CryptoUtils.aesEncrypt(dexZipKey, iv, zipData);
-            if (zipCipher == null) {
+            byte[] zipBlob = CryptoUtils.encryptDexZipBlob(dexZipKey, iv, zipData);
+            if (zipBlob == null) {
                 throw new IllegalStateException("encrypt dex zip failed");
             }
-            byte[] zipBlob = new byte[iv.length + zipCipher.length];
-            System.arraycopy(iv, 0, zipBlob, 0, iv.length);
-            System.arraycopy(zipCipher, 0, zipBlob, iv.length, zipCipher.length);
 
             byte[] unShellDexArray =  com.android.dex.util.FileUtils.readFile(!needRename ? shellDexFile : renameDexFile); // Read the dex file as binary data
             int zipDataLen = zipBlob.length;
@@ -678,10 +675,8 @@ public abstract class AndroidPackage {
 
     public void extractDexCode(String packageDir, String dexCodeSavePath) {
         List<File> dexFiles = getDexFiles(getDexDir(packageDir));
-        // TreeMap keeps ascending dex numbers so MultiDexCode entries are stored in
-        // dex order (classes.dex -> slot 0, classes2.dex -> slot 1, ...), matching the
-        // runtime dexMap index semantics (dpt.cpp readCodeItem / parse_dex_number).
-        Map<Integer,List<Instruction>> instructionMap = new TreeMap<>();
+        // Preserve ascending dex numbers while worker threads populate the map.
+        Map<Integer,List<Instruction>> instructionMap = newInstructionMap();
         String appNameNew = Const.KEY_CODE_ITEM_STORE_NAME;
         String dataOutputPath = dexCodeSavePath + File.separator + appNameNew;
 
@@ -704,11 +699,11 @@ public abstract class AndroidPackage {
         }
         for(File dexFile : dexFiles) {
             ThreadPool.getInstance().execute(() -> {
-                final int dexNo = DexUtils.getDexNumber(dexFile.getName());
-                if(dexNo < 0) {
-                    countDownLatch.countDown();
-                    return;
-                }
+                try {
+                    final int dexNo = DexUtils.getDexNumber(dexFile.getName());
+                    if(dexNo < 0) {
+                        return;
+                    }
 
                 File injectedDexFile = new File(dexFile.getAbsolutePath() + "_inject.dex");
 
@@ -774,11 +769,14 @@ public abstract class AndroidPackage {
                     }
                 }
 
-                if("classes.dex".equals(dexFile.getName())) {
-                    String dexSignature = DexUtils.getDexSignature(dexFile);
-                    ShellConfig.getInstance().setDexSign(dexSignature);
+                    if("classes.dex".equals(dexFile.getName())) {
+                        String dexSignature = DexUtils.getDexSignature(dexFile);
+                        ShellConfig.getInstance().setDexSign(dexSignature);
+                    }
+                } finally {
+                    // Never leave the packaging thread blocked if one dex task fails.
+                    countDownLatch.countDown();
                 }
-                countDownLatch.countDown();
             });
 
         }
@@ -798,6 +796,13 @@ public abstract class AndroidPackage {
 
         MultiDexCodeUtils.writeMultiDexCode(dataOutputPath,multiDexCode);
 
+    }
+
+    static Map<Integer, List<Instruction>> newInstructionMap() {
+        // extractDexCode writes one entry per dex from the shared worker pool.  The
+        // concurrent sorted map preserves the runtime's dex-index order without
+        // relying on unsafe concurrent writes to TreeMap.
+        return new ConcurrentSkipListMap<>();
     }
     /**
      * Get all dex files

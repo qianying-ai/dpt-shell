@@ -62,4 +62,21 @@ public class CryptoUtils {
         }
         return null;
     }
+
+    /**
+     * Encrypt the dex ZIP into the on-disk blob format: IV || AES-CBC ciphertext.
+     */
+    public static byte[] encryptDexZipBlob(byte[] key, byte[] iv, byte[] plainZip) {
+        if (iv == null || iv.length != 16 || plainZip == null || plainZip.length == 0) {
+            return null;
+        }
+        byte[] cipher = aesEncrypt(key, iv, plainZip);
+        if (cipher == null || cipher.length == 0) {
+            return null;
+        }
+        byte[] blob = new byte[iv.length + cipher.length];
+        System.arraycopy(iv, 0, blob, 0, iv.length);
+        System.arraycopy(cipher, 0, blob, iv.length, cipher.length);
+        return blob;
+    }
 }

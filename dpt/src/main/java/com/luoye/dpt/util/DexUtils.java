@@ -326,7 +326,7 @@ public class DexUtils {
      * splitmix64 finalizer-style mixer. Must stay bit-identical with the C++
      * implementation in dpt_hook.cpp (unsigned shifts, long wraparound == uint64_t).
      */
-    private static long splitmix64(long s) {
+    static long splitmix64(long s) {
         s += 0x9E3779B97F4A7C15L;
         long z = s;
         z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
@@ -340,7 +340,7 @@ public class DexUtils {
      * dexMap index (dpt.cpp readCodeItem / dpt_util.cpp parse_dex_number).
      * Must stay bit-identical with patchMethod() in dpt_hook.cpp.
      */
-    private static long deriveInsnsKeyStream(int masterKey, int dexIndex, int methodIdx) {
+    static long deriveInsnsKeyStream(int masterKey, int dexIndex, int methodIdx) {
         long seed = (masterKey & 0xffffffffL)
                 ^ (((long) dexIndex + 1) << 32)
                 ^ ((methodIdx & 0xffffffffL) * 0x9E3779B97F4A7C15L);
