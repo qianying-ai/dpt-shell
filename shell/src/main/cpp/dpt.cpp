@@ -342,10 +342,9 @@ void decrypt_section(const char* section_name, int temp_prot, int target_prot) {
 
     get_elf_section(&shdr, so_path.c_str(), section_name);
     if (shdr.sh_size == 0) abort();
-    Elf_Off offset = shdr.sh_offset;
     Elf_Word size = shdr.sh_size;
 
-    DLOGD("section name: %s, offset: %p, size: %d", section_name, (uint8_t *)offset, size);
+    DLOGD("section name: %s, offset: %p, size: %d", section_name, (uint8_t *)shdr.sh_offset, size);
     // 直接映射时应使用虚拟地址，不能假设段的文件偏移与内存地址相等。
     void *target = (u_char *)info.dli_fbase + shdr.sh_addr;
 
