@@ -15,7 +15,6 @@ import android.util.Log;
 import androidx.annotation.NonNull;
 
 import com.luoyesiqiu.shell.util.EnvUtils;
-import com.luoyesiqiu.shell.util.FileUtils;
 
 import java.lang.reflect.Method;
  @TargetApi(28)
@@ -68,7 +67,6 @@ public class ProxyComponentFactory extends AppComponentFactory {
             }
             String dataDir = EnvUtils.getApplicationInfo().dataDir;
             String sourceDir = EnvUtils.getApplicationInfo().sourceDir;
-            FileUtils.unzipLibs(sourceDir,dataDir);
             JniBridge.loadShellLibs(dataDir);
         }
         JniBridge.ia();
@@ -132,7 +130,6 @@ public class ProxyComponentFactory extends AppComponentFactory {
     @Override
     public ClassLoader instantiateClassLoader(@NonNull ClassLoader cl, @NonNull ApplicationInfo aInfo) {
         Log.d(TAG, "instantiateClassLoader() called with: cl = [" + cl + "], aInfo = [" + aInfo + "]");
-        FileUtils.unzipLibs(aInfo.sourceDir, aInfo.dataDir);
         JniBridge.loadShellLibs(aInfo.dataDir);
 
         JniBridge.ia();

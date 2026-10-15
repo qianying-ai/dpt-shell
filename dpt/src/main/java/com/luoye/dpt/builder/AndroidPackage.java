@@ -795,6 +795,18 @@ public abstract class AndroidPackage {
         MultiDexCode multiDexCode = MultiDexCodeUtils.makeMultiDexCode(instructionMap);
 
         MultiDexCodeUtils.writeMultiDexCode(dataOutputPath,multiDexCode);
+        // 指令 XOR 仅保留内存恢复语义；磁盘容器必须另行认证加密。
+        try {
+            java.nio.file.Path codePath = java.nio.file.Paths.get(dataOutputPath);
+            byte[] nonce = new byte[12];
+            new SecureRandom().nextBytes(nonce);
+            byte[] sealed = CryptoUtils.encryptCodeItemBlob(
+                    HexUtils.hexToBytes(shellConfig.getDexZipKey()), nonce,
+                    java.nio.file.Files.readAllBytes(codePath));
+            java.nio.file.Files.write(codePath, sealed);
+        } catch (IOException e) {
+            throw new IllegalStateException("cannot seal code items", e);
+        }
 
     }
 

@@ -10,7 +10,7 @@
 #include <stddef.h>
 #include <mbedtls/aes.h>
 #include <mbedtls/md.h>
-#include "common/dpt_log.h"
+#include <string>
 
 std::vector<uint8_t> hmac_sha256(const uint8_t *key,
                                  size_t key_len,
@@ -22,4 +22,6 @@ std::vector<uint8_t> aes_cbc_decrypt(const uint8_t *key,
                                      const uint8_t *iv,
                                      const uint8_t *in,
                                      size_t inlen);
+std::vector<uint8_t> decrypt_code_item_blob(const std::string &root_key_hex,
+                                          const uint8_t *blob, size_t len);
 #endif //DPT_DPT_CRYPTO_H

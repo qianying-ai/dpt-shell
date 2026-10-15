@@ -8,9 +8,34 @@ import java.security.NoSuchAlgorithmException;
 import javax.crypto.Cipher;
 import javax.crypto.Mac;
 import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
 public class CryptoUtils {
+    public static final String CODE_ITEM_DOMAIN = "qy-dpt-code-item/v1";
+
+    /** 指令容器独立派生密钥；魔数与版本参与认证，随机 nonce 每包生成。 */
+    public static byte[] encryptCodeItemBlob(byte[] rootKey, byte[] nonce, byte[] plain) {
+        if (rootKey == null || rootKey.length != 32 || nonce == null || nonce.length != 12
+                || plain == null || plain.length == 0) {
+            throw new IllegalArgumentException("invalid code item input");
+        }
+        try {
+            byte[] magic = new byte[] {'D', 'P', 'C', '1'};
+            byte[] key = hmacSha256(rootKey, CODE_ITEM_DOMAIN);
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"), new GCMParameterSpec(128, nonce));
+            cipher.updateAAD(magic);
+            byte[] sealed = cipher.doFinal(plain);
+            byte[] blob = new byte[16 + sealed.length];
+            System.arraycopy(magic, 0, blob, 0, 4);
+            System.arraycopy(nonce, 0, blob, 4, 12);
+            System.arraycopy(sealed, 0, blob, 16, sealed.length);
+            return blob;
+        } catch (java.security.GeneralSecurityException e) {
+            throw new IllegalStateException("code item encryption failed", e);
+        }
+    }
     public static final String RC4Transform = "RC4";
     private static final String HMAC_SHA256 = "HmacSHA256";
 

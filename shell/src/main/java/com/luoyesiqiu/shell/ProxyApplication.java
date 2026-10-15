@@ -7,7 +7,6 @@ import android.content.pm.PackageManager;
 import android.text.TextUtils;
 import android.util.Log;
 
-import com.luoyesiqiu.shell.util.FileUtils;
 
 /**
  * Created by luoyesiqiu
@@ -58,7 +57,6 @@ public class ProxyApplication extends Application {
             if(applicationInfo == null) {
                 throw new NullPointerException("application info is null");
             }
-            FileUtils.unzipLibs(applicationInfo.sourceDir, applicationInfo.dataDir);
             JniBridge.loadShellLibs(applicationInfo.dataDir);
             Log.d(TAG,"ProxyApplication init");
             JniBridge.ia();

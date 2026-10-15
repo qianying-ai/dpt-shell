@@ -1,20 +1,12 @@
 package com.luoyesiqiu.shell;
 
-import android.content.Context;
-import android.util.Log;
-
 import androidx.annotation.Keep;
-
-import com.luoyesiqiu.shell.util.EnvUtils;
-
-import java.io.File;
 
 /**
  * Created by luoyesiqiu
  */
 @Keep
 public class JniBridge {
-    private static final String TAG = "dpt_" + JniBridge.class.getSimpleName();
     public static native void craoc(String applicationClassName);
     public static native void ia();
     public static native String rcf();
@@ -27,27 +19,12 @@ public class JniBridge {
     public static native void clinit();
 
     public static void loadShellLibs(String workspacePath) {
-        final String[] allowLibNames = {Global.SHELL_SO_NAME};
-        try {
-            String abiDirName = EnvUtils.getAbiDirName();
-            File shellLibsFile = new File(workspacePath + File.separator + Global.LIB_DIR + File.separator + abiDirName);
-            File[] files = shellLibsFile.listFiles();
-            if(files != null) {
-                for(File shellLibPath : files) {
-                    String fullLibPath = shellLibPath.getAbsolutePath();
-                    for(String libName : allowLibNames) {
-                        String libSuffix = File.separator + libName;
-                        if(fullLibPath.endsWith(libSuffix)) {
-                            Log.d(TAG, "loadShellLibs: " + fullLibPath);
-                            System.load(fullLibPath);
-                        }
-                    }
-                }
-            }
+        // 平台负责 ABI 选择和签名 APK 内映射；不再枚举、释放或加载应用可写副本。
+        String name = Global.SHELL_SO_NAME;
+        if (!name.startsWith("lib") || !name.endsWith(".so")) {
+            throw new SecurityException("Invalid shell library name");
         }
-        catch (Throwable e){
-            Log.w(TAG,e);
-        }
+        System.loadLibrary(name.substring(3, name.length() - 3));
     }
 
 }

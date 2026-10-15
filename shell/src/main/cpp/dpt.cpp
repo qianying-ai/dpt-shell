@@ -17,6 +17,7 @@ static jobject g_realApplicationInstance = nullptr;
 static jclass g_realApplicationClass = nullptr;
 
 std::optional<std::tuple<uint8_t *,size_t>> g_codeItemFileData;
+static std::vector<uint8_t> g_code_item_plain;
 std::unordered_map<int,std::vector<data::CodeItem *> *> dexMap;
 
 DPT_DATA_SECTION uint8_t DATA_SECTION_BITCODE[] = ".bitcode";
@@ -550,8 +551,22 @@ DPT_ENCRYPT void init_app(JNIEnv *env, jclass __unused) {
     else {
         DLOGD("no need read codeitem from zip");
     }
+    if (!g_codeItemFileData.has_value()) {
+        env->ThrowNew(env->FindClass("java/lang/SecurityException"), "Missing protected code items");
+        unload_package(package_addr, package_size);
+        return;
+    }
     auto [entry_data, entry_size] = g_codeItemFileData.value();
-    readCodeItem((uint8_t *)entry_data, entry_size);
+    if (g_code_item_plain.empty()) {
+        g_code_item_plain = decrypt_code_item_blob(g_shell_config.dex_zip_key, entry_data, entry_size);
+    }
+    if (g_code_item_plain.empty()) {
+        env->ThrowNew(env->FindClass("java/lang/SecurityException"), "Invalid protected code items");
+        unload_package(package_addr, package_size);
+        return;
+    }
+    // 指令对象持有缓冲区切片，明文必须与进程同寿命；只留在内存。
+    readCodeItem(g_code_item_plain.data(), g_code_item_plain.size());
 
     pthread_mutex_lock(&g_write_dexes_mutex);
     if (android_get_device_api_level() >= 26) {

@@ -336,15 +336,15 @@ extern ShellConfig g_shell_config;
  * Decrypt the dex zip blob appended to shell classes.dex.
  * Blob format: [IV 16B][AES-256-CBC/PKCS7 ciphertext], key = g_shell_config.dex_zip_key (hex).
  * Returns plaintext zip bytes; empty vector on failure.
- * Defensive fallback: empty dex_zip_key returns the blob as-is (should not happen in practice).
+ * 密钥缺失时拒绝解密，不把未经认证的容器当明文继续加载。
  */
 DPT_ENCRYPT static std::vector<uint8_t> decrypt_dex_zip_blob(const uint8_t *blob, size_t len) {
     if (blob == nullptr || len == 0) {
         return {};
     }
     if (g_shell_config.dex_zip_key.empty()) {
-        DLOGW("dex_zip_key is empty, treat dex zip blob as plain");
-        return std::vector<uint8_t>(blob, blob + len);
+        DLOGE("dex_zip_key is missing");
+        return {};
     }
     const std::string &key_hex = g_shell_config.dex_zip_key;
     if (key_hex.size() != 64) {

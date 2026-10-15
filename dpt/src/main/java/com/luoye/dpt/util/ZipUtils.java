@@ -106,6 +106,10 @@ public class ZipUtils {
         if(defaultStoreList.contains(fileName)) {
             zipParameters.setCompressionMethod(CompressionMethod.STORE);
         }
+        // 新增的壳库在原 ZIP 中没有压缩记录，必须显式 STORE 才能由 linker 直接映射。
+        if (fileName.startsWith("lib/") && fileName.endsWith(".so")) {
+            zipParameters.setCompressionMethod(CompressionMethod.STORE);
+        }
     }
 
     private static void addEntry(ZipFile zipFile,String rootDir,File parent) throws IOException{
@@ -432,7 +436,9 @@ public class ZipUtils {
         ZipEntry entry = new ZipEntry(buffer.substring(1));
         String rawPath = file.getAbsolutePath();
         int index = rawPath.indexOf(dirNameNew[0]);
-        if (index != -1 && doNotCompress.contains(rawPath.substring(index + 1 + dirNameNew[0].length()))) {
+        String entryPath = buffer.substring(1);
+        boolean platformLibrary = entryPath.startsWith("lib/") && entryPath.endsWith(".so");
+        if (platformLibrary || (index != -1 && doNotCompress.contains(rawPath.substring(index + 1 + dirNameNew[0].length())))) {
             entry.setMethod(ZipEntry.STORED);
             entry.setSize(file.length());
             entry.setCrc(calFileCRC32(file));

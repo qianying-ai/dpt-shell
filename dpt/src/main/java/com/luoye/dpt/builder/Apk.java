@@ -114,20 +114,8 @@ public class Apk extends AndroidPackage {
 
     @Override
     public void setExtractNativeLibs(String manifestDir){
-        String inManifestPath = manifestDir + File.separator + "AndroidManifest.xml";
-        String outManifestPath = manifestDir + File.separator + "AndroidManifest_new.xml";
-        ModificationProperty property = new ModificationProperty();
-
-        property.addApplicationAttribute(new AttributeItem(NodeValue.Application.EXTRACTNATIVELIBS, "true"));
-
-        FileProcesser.processManifestFile(inManifestPath, outManifestPath, property);
-
-        File inManifestFile = new File(inManifestPath);
-        File outManifestFile = new File(outManifestPath);
-
-        inManifestFile.delete();
-
-        outManifestFile.renameTo(inManifestFile);
+        // 壳从独立 assets 加载，不能改写宿主原生库的安装策略。
+        // 保留原属性（包括未声明时的平台默认值），由宿主 ZIP/ELF 卡口验证兼容性。
     }
 
     @Override
@@ -217,6 +205,7 @@ public class Apk extends AndroidPackage {
         apk.copyNativeLibs(apkMainProcessPath);
 
         apk.encryptSoFiles(apkMainProcessPath, encKey);
+        apk.moveShellLibrariesToSignedLibDir(apkMainProcessPath);
 
         /*======================================*
          * Build package
@@ -236,6 +225,27 @@ public class Apk extends AndroidPackage {
     public void protect() throws IOException {
         super.protect();
         process(this);
+    }
+
+    /** 壳库与宿主库一样交由平台从签名 APK 映射，避免私有目录副本与 CRC32 信任链。 */
+    void moveShellLibrariesToSignedLibDir(String packageDir) {
+        File staged = new File(getOutAssetsDir(packageDir), com.luoye.dpt.config.Const.KEY_LIBS_DIR_NAME);
+        File[] dirs = staged.listFiles();
+        if (dirs == null) throw new IllegalStateException("missing shell native libraries");
+        for (File dir : dirs) {
+            String abi = dir.getName().equals("arm") ? "armeabi-v7a"
+                    : dir.getName().equals("arm64") ? "arm64-v8a" : dir.getName();
+            File dest = new File(getLibDir(packageDir), abi);
+            if (!dest.isDirectory() && !dest.mkdirs()) throw new IllegalStateException("cannot create " + dest);
+            File[] libs = dir.listFiles((parent, name) -> name.endsWith(".so"));
+            if (libs == null) continue;
+            for (File lib : libs) {
+                File target = new File(dest, lib.getName());
+                // 不允许覆盖宿主同名库；打包失败必须阻止发布。
+                if (target.exists() || !lib.renameTo(target)) throw new IllegalStateException("cannot move shell library " + lib.getName());
+            }
+        }
+        FileUtils.deleteRecurse(staged);
     }
 
 }

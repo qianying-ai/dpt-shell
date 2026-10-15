@@ -4,6 +4,47 @@
 
 #include "dpt_crypto.h"
 #include <cstring>
+#include <mbedtls/gcm.h>
+#include <mbedtls/platform_util.h>
+#ifndef DPT_HOST_CRYPTO
+#include "common/dpt_log.h"
+#else
+#define DLOGE(...)
+#define DLOGD(...)
+#endif
+
+// 与 Java CryptoUtils 的 DPC1 容器逐字节一致，认证失败绝不交给指令解析器。
+std::vector<uint8_t> decrypt_code_item_blob(const std::string &root_key_hex,
+                                          const uint8_t *blob, size_t len) {
+    if (!blob || len <= 32 || root_key_hex.size() != 64 || memcmp(blob, "DPC1", 4) != 0) return {};
+    uint8_t root_key[32];
+    auto digit = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+    for (size_t i = 0; i < 32; ++i) {
+        int hi = digit(root_key_hex[2 * i]), lo = digit(root_key_hex[2 * i + 1]);
+        if (hi < 0 || lo < 0) { mbedtls_platform_zeroize(root_key, sizeof(root_key)); return {}; }
+        root_key[i] = static_cast<uint8_t>((hi << 4) | lo);
+    }
+    const char domain[] = "qy-dpt-code-item/v1";
+    auto key = hmac_sha256(root_key, sizeof(root_key),
+                           reinterpret_cast<const uint8_t *>(domain), sizeof(domain) - 1);
+    mbedtls_platform_zeroize(root_key, sizeof(root_key));
+    if (key.size() != 32) return {};
+    std::vector<uint8_t> plain(len - 32);
+    mbedtls_gcm_context ctx;
+    mbedtls_gcm_init(&ctx);
+    int ret = mbedtls_gcm_setkey(&ctx, MBEDTLS_CIPHER_ID_AES, key.data(), 256);
+    if (ret == 0) ret = mbedtls_gcm_auth_decrypt(&ctx, plain.size(), blob + 4, 12,
+                                               blob, 4, blob + len - 16, 16, blob + 16, plain.data());
+    mbedtls_gcm_free(&ctx);
+    mbedtls_platform_zeroize(key.data(), key.size());
+    if (ret != 0) { mbedtls_platform_zeroize(plain.data(), plain.size()); return {}; }
+    return plain;
+}
 
 std::vector<uint8_t> hmac_sha256(const uint8_t *key,
                                  size_t key_len,
