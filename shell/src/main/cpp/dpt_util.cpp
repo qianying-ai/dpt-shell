@@ -9,6 +9,7 @@
 #include <errno.h>
 #include <dlfcn.h>
 #include <mz_strm.h>
+#include <mz_strm_os.h>
 #include <string>
 #include <algorithm>
 #include <cctype>
@@ -763,52 +764,71 @@ read_zip_file_entry(void *zip_addr, off_t zip_size, const char *entry_name) {
 }
 
 void get_elf_section(Elf_Shdr *target, const char *elf_path, const char *sh_name) {
-    if (elf_path == NULL) {
-        return;
-    }
-
-    FILE *elf_fp = fopen(elf_path, (char *) DATA_R_FLAG);
-    if (!elf_fp) {
-        DLOGW("cannot open elf file: %s", elf_path);
-        return;
-    }
-
-    fseek(elf_fp, 0L, SEEK_END);
-    size_t lib_size = ftell(elf_fp);
-    fseek(elf_fp, 0L, SEEK_SET);
-
-    uint8_t *data = (uint8_t *) calloc(lib_size, 1);
-    fread(data, 1, lib_size, elf_fp);
-
-    uint8_t *elf_bytes_data = data;
-
-    Elf_Ehdr *ehdr = (Elf_Ehdr *) elf_bytes_data;
-    Elf_Shdr *shdr = (Elf_Shdr *) (((uint8_t *) elf_bytes_data) + ehdr->e_shoff);
-    Elf_Half shstrndx = ehdr->e_shstrndx;
-
-    //seek to .shstr
-    Elf_Shdr *shstr_shdr = (Elf_Shdr *) ((uint8_t *) shdr + sizeof(Elf_Shdr) * shstrndx);
-
-    uint8_t *shstr_addr = elf_bytes_data + shstr_shdr->sh_offset;
-
-    bool found = false;
-    for (int i = 0; i < ehdr->e_shnum; i++) {
-        const char *section_name = reinterpret_cast<const char *>((char *) shstr_addr +
-                                                                  shdr->sh_name);
-        if (strcmp(section_name, sh_name) == 0) {
-            memcpy(target, shdr, sizeof(Elf_Shdr));
-            DLOGD("find section: %s", sh_name);
-            found = true;
-            break;
+    if (!target || !elf_path || !sh_name) return;
+    memset(target, 0, sizeof(*target));
+    std::vector<uint8_t> bytes;
+    std::string path(elf_path);
+    size_t separator = path.find("!/");
+    if (separator != std::string::npos) {
+        // linker 的 dladdr 路径可指向 APK 内部；只读取该 ZIP 条目，不释放到可写目录。
+        // 此处发生在 .bitcode 解密前，不能调用被 DPT_ENCRYPT 标记的辅助函数。
+        void *stream = mz_stream_os_create();
+        void *zip = mz_zip_create();
+        if (mz_stream_open(stream, path.substr(0, separator).c_str(), MZ_OPEN_MODE_READ) == MZ_OK
+                && mz_zip_open(zip, stream, MZ_OPEN_MODE_READ) == MZ_OK) {
+            mz_zip_file *entry = nullptr;
+            if (mz_zip_locate_entry(zip, path.substr(separator + 2).c_str(), 1) == MZ_OK
+                    && mz_zip_entry_get_info(zip, &entry) == MZ_OK && entry
+                    && entry->uncompressed_size > 0 && entry->uncompressed_size <= 32 * 1024 * 1024
+                    && mz_zip_entry_read_open(zip, 0, nullptr) == MZ_OK) {
+                bytes.resize(static_cast<size_t>(entry->uncompressed_size));
+                size_t offset = 0;
+                while (offset < bytes.size()) {
+                    int32_t count = mz_zip_entry_read(zip, bytes.data() + offset,
+                                                     static_cast<int32_t>(bytes.size() - offset));
+                    if (count <= 0) break;
+                    offset += count;
+                }
+                if (offset != bytes.size() || mz_zip_entry_read_close(zip, nullptr, nullptr, nullptr) != MZ_OK) bytes.clear();
+            }
+            mz_zip_close(zip);
         }
-        shdr++;
+        mz_zip_delete(&zip);
+        mz_stream_close(stream);
+        mz_stream_os_delete(&stream);
+    } else {
+        FILE *file = fopen(elf_path, "rb");
+        if (!file) return;
+        if (fseek(file, 0, SEEK_END) == 0) {
+            long length = ftell(file);
+            if (length > 0 && length <= 32 * 1024 * 1024 && fseek(file, 0, SEEK_SET) == 0) {
+                bytes.resize(static_cast<size_t>(length));
+                if (fread(bytes.data(), 1, bytes.size(), file) != bytes.size()) bytes.clear();
+            }
+        }
+        fclose(file);
     }
-
-    if (!found) {
-        DLOGE("cannot find section: %s", sh_name);
+    if (bytes.size() < sizeof(Elf_Ehdr)) return;
+    Elf_Ehdr header;
+    memcpy(&header, bytes.data(), sizeof(header));
+    if (memcmp(header.e_ident, ELFMAG, SELFMAG) != 0 || header.e_shentsize != sizeof(Elf_Shdr)
+            || header.e_shstrndx >= header.e_shnum || header.e_shoff > bytes.size()
+            || header.e_shnum > (bytes.size() - header.e_shoff) / sizeof(Elf_Shdr)) return;
+    Elf_Shdr strings;
+    memcpy(&strings, bytes.data() + header.e_shoff + sizeof(Elf_Shdr) * header.e_shstrndx, sizeof(strings));
+    if (strings.sh_offset > bytes.size() || strings.sh_size > bytes.size() - strings.sh_offset) return;
+    for (size_t i = 0; i < header.e_shnum; ++i) {
+        Elf_Shdr section;
+        memcpy(&section, bytes.data() + header.e_shoff + i * sizeof(section), sizeof(section));
+        if (section.sh_name >= strings.sh_size) continue;
+        const char *name = reinterpret_cast<const char *>(bytes.data() + strings.sh_offset + section.sh_name);
+        if (!memchr(name, 0, strings.sh_size - section.sh_name)) continue;
+        if (strcmp(name, sh_name) == 0 && section.sh_offset <= bytes.size()
+                && section.sh_size <= bytes.size() - section.sh_offset) {
+            *target = section;
+            return;
+        }
     }
-    free(data);
-    fclose(elf_fp);
 }
 
 DPT_ENCRYPT void
